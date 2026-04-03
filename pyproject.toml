@@ -26,4 +26,4 @@ action = "models:Action"
 reward = "models:Reward"
 
 [project.scripts]
-server = "server.app:app"
+server = "server.app:main"
