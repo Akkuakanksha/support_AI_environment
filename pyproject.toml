@@ -24,3 +24,6 @@ entrypoint = "app.env:SupportEnv"
 observation = "models:Observation"
 action = "models:Action"
 reward = "models:Reward"
+
+[project.scripts]
+server = "server.app:app"
