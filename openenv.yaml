@@ -1,0 +1,25 @@
+name: support-env
+description: AI-powered customer support ticket resolution environment
+version: 0.1.0
+
+entrypoint: app.env:SupportEnv
+
+observation: models:Observation
+action: models:Action
+reward: models:Reward
+
+tasks:
+  - id: easy
+    description: Simple refund inquiry — respond with policy then close
+    difficulty: easy
+  - id: medium
+    description: Failed payment — classify, respond, close
+    difficulty: medium
+  - id: hard
+    description: Double charge + angry customer — classify, escalate, respond, close
+    difficulty: hard
+
+tags:
+  - customer-support
+  - real-world
+  - reasoning
