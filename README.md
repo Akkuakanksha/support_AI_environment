@@ -1,3 +1,11 @@
+---
+title: Support Env
+emoji: 🎧
+colorFrom: purple
+colorTo: blue
+sdk: docker
+pinned: false
+---
 # 🎧 Support Env — OpenEnv Customer Support Environment
 
 An **OpenEnv**-compliant environment where AI agents learn to resolve customer support tickets by taking a sequence of structured actions.
