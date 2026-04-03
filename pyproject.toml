@@ -1,0 +1,26 @@
+﻿[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "support-env"
+version = "0.1.0"
+description = "AI-powered customer support ticket resolution environment"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.29.0",
+    "pydantic>=2.0.0",
+    "openai>=1.0.0",
+    "openenv-core>=0.2.2",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.openenv]
+entrypoint = "app.env:SupportEnv"
+observation = "models:Observation"
+action = "models:Action"
+reward = "models:Reward"
