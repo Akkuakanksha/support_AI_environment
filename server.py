@@ -20,14 +20,15 @@ sys.path.insert(0, str(ROOT))
 from models import Action, Observation, Reward
 from app.env import SupportEnv, TASKS
 
-# ── App + single shared env instance ─────────────────────────────────────────
+# ── App + one env instance per task so switching tasks resets cleanly ─────────
 app = FastAPI(
     title="Support Env",
     description="AI Customer Support Ticket Resolution Environment",
     version="0.1.0",
 )
 
-_env = SupportEnv()
+_envs = {0: SupportEnv(), 1: SupportEnv(), 2: SupportEnv()}
+_current_task_index = 0
 
 # ── Pydantic request schemas ──────────────────────────────────────────────────
 
@@ -43,15 +44,19 @@ class StepRequest(BaseModel):
 
 @app.post("/reset")
 def reset(req: ResetRequest = None):
-    task_idx = req.task_index if req else None
-    obs = _env.reset(task_index=task_idx)
+    global _current_task_index
+    task_idx = req.task_index if (req and req.task_index is not None) else _current_task_index
+    _current_task_index = task_idx % 3
+    # Always reset the env for this task from scratch
+    _envs[_current_task_index] = SupportEnv()
+    obs = _envs[_current_task_index].reset(task_index=_current_task_index)
     return obs.model_dump()
 
 
 @app.post("/step")
 def step(req: StepRequest):
     action = Action(action_type=req.action_type, content=req.content)
-    obs, reward, done, info = _env.step(action)
+    obs, reward, done, info = _envs[_current_task_index].step(action)
     return {
         "observation": obs.model_dump(),
         "reward": reward.model_dump(),
@@ -62,7 +67,7 @@ def step(req: StepRequest):
 
 @app.get("/state")
 def state():
-    return _env.state()
+    return _envs[_current_task_index].state()
 
 
 @app.get("/tasks")
@@ -140,6 +145,9 @@ HTML = """<!DOCTYPE html>
 
   .done-banner { background: rgba(67,217,140,0.1); border: 1px solid var(--success); border-radius: 8px; padding: 0.8rem 1rem; text-align: center; color: var(--success); font-weight: 600; margin-bottom: 1rem; display: none; }
 
+  .total-score { font-size: 0.85rem; color: var(--muted); margin-top: 0.5rem; }
+  .total-score span { color: var(--warn); font-weight: 700; }
+
   @media(max-width: 700px){ main { grid-template-columns: 1fr; } }
 </style>
 </head>
@@ -177,10 +185,10 @@ HTML = """<!DOCTYPE html>
       <h2>🕹 Actions</h2>
       <div class="done-banner" id="doneBanner">✅ Episode Complete!</div>
       <div class="actions-grid">
-        <button class="btn-action" onclick="setAction('classify')">🏷 Classify</button>
-        <button class="btn-action" onclick="setAction('respond')">💬 Respond</button>
-        <button class="btn-action" onclick="setAction('escalate')">🚨 Escalate</button>
-        <button class="btn-action" onclick="setAction('close')">✅ Close</button>
+        <button class="btn-action" onclick="setAction('classify', this)">🏷 Classify</button>
+        <button class="btn-action" onclick="setAction('respond', this)">💬 Respond</button>
+        <button class="btn-action" onclick="setAction('escalate', this)">🚨 Escalate</button>
+        <button class="btn-action" onclick="setAction('close', this)">✅ Close</button>
       </div>
       <textarea id="responseContent" placeholder="Optional: type your response content here (for respond action)..."></textarea>
       <button class="btn-primary" onclick="doStep()">▶ Take Action</button>
@@ -200,6 +208,7 @@ HTML = """<!DOCTYPE html>
 let selectedAction = 'classify';
 let currentTaskIndex = 0;
 let episodeDone = false;
+let totalScore = 0.0;
 
 async function api(path, method='GET', body=null){
   const opts = { method, headers:{'Content-Type':'application/json'} };
@@ -208,10 +217,10 @@ async function api(path, method='GET', body=null){
   return r.json();
 }
 
-function setAction(a){
+function setAction(a, btn){
   selectedAction = a;
   document.querySelectorAll('.btn-action').forEach(b => b.classList.remove('active'));
-  event.target.classList.add('active');
+  btn.classList.add('active');
 }
 
 function selectTask(idx){
@@ -237,18 +246,25 @@ function updateObs(obs){
 
 function updateReward(reward){
   const score = reward.score ?? 0;
-  const pct = Math.round(score * 100);
+  totalScore += score;
+  const pct = Math.min(Math.round(score * 100), 100);
   document.getElementById('rewardBox').innerHTML = `
     <div class="reward-score">${score.toFixed(2)}</div>
     <div class="score-bar-wrap"><div class="score-bar" style="width:${pct}%"></div></div>
     <div class="reward-reason">${reward.reason || ''}</div>
+    <div class="total-score">Episode total: <span>${totalScore.toFixed(2)}</span></div>
   `;
 }
 
 async function doReset(){
   episodeDone = false;
+  totalScore = 0.0;
   document.getElementById('doneBanner').style.display = 'none';
   document.getElementById('rewardBox').innerHTML = '<div style="color:var(--muted)">No reward yet</div>';
+  document.getElementById('responseContent').value = '';
+  // Remove active from action buttons
+  document.querySelectorAll('.btn-action').forEach(b => b.classList.remove('active'));
+  selectedAction = 'classify';
   const obs = await api('/reset','POST',{task_index: currentTaskIndex});
   updateObs(obs);
 }
