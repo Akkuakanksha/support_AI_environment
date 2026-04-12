@@ -142,7 +142,8 @@ def run_task(task_index: int) -> float:
         obs, reward, done, info = env.step(action)
 
         step += 1
-        rewards.append(reward.score)
+        clamped_r = round(min(max(reward.score, 0.01), 0.99), 2)
+        rewards.append(clamped_r)
         last_error = error
 
         # Action string representation
@@ -153,7 +154,7 @@ def run_task(task_index: int) -> float:
         # ── [STEP] line ───────────────────────────────────────────────────────
         print(
             f"[STEP] step={step} action={action_str} "
-            f"reward={reward.score:.2f} "
+            f"reward={clamped_r:.2f} "
             f"done={'true' if done else 'false'} "
             f"error={error}",
             flush=True
