@@ -1,11 +1,11 @@
 """
 Baseline inference script for Support Env.
-Uses OpenAI client to run an LLM agent against all 3 tasks.
+Uses OpenAI Client for all LLM calls.
 
 Required env vars:
-  API_BASE_URL  - LLM API base URL
-  MODEL_NAME    - model identifier
-  HF_TOKEN      - Hugging Face / API key (used as api_key)
+  API_BASE_URL  - API endpoint for the LLM (has default)
+  MODEL_NAME    - Model identifier (has default)
+  HF_TOKEN      - Hugging Face API token (mandatory)
 """
 import os
 import sys
@@ -15,12 +15,18 @@ from openai import OpenAI
 from models import Action
 from app.env import SupportEnv, TASKS
 
-# ── LLM Client ────────────────────────────────────────────────────────────────
+# ── Environment variables ─────────────────────────────────────────────────────
 API_BASE_URL = os.getenv("API_BASE_URL", "https://api-inference.huggingface.co/v1")
 MODEL_NAME   = os.getenv("MODEL_NAME",   "mistralai/Mistral-7B-Instruct-v0.3")
-API_KEY      = os.getenv("HF_TOKEN",     os.getenv("OPENAI_API_KEY", "no-key"))
+HF_TOKEN     = os.getenv("HF_TOKEN")
 
-client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+if HF_TOKEN is None:
+    raise ValueError("HF_TOKEN environment variable is required")
+
+# ── OpenAI Client ─────────────────────────────────────────────────────────────
+client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
+
+BENCHMARK = "support-env"
 
 SYSTEM_PROMPT = """You are a customer support AI agent operating in the Support Env environment.
 You must handle support tickets by choosing the correct sequence of actions.
@@ -39,8 +45,7 @@ Guidelines:
 - Return ONLY the JSON object, no extra text."""
 
 
-# ── Rule-based fallback agent ─────────────────────────────────────────────────
-
+# ── Rule-based fallback agent (when LLM unavailable) ─────────────────────────
 FALLBACK_SEQUENCES = {
     "easy": [
         Action(action_type="respond", content="You can request a refund within 7 days of purchase. Please contact us with your order ID."),
@@ -72,28 +77,12 @@ def get_difficulty(obs_dict: dict) -> str:
         return "hard"
 
 
-def normalize_score(raw_score: float, max_possible: float) -> float:
+def llm_decide(obs_dict: dict, task_name: str) -> tuple:
     """
-    Normalize cumulative score to strictly (0, 1) range.
-    Clamps to [0.01, 0.99] to satisfy validator requirement.
+    Call the LLM to decide the next action.
+    Returns (Action, error_string_or_null).
+    Falls back to rule-based agent on error.
     """
-    if max_possible <= 0:
-        return 0.5
-    normalized = raw_score / max_possible
-    # Strictly between 0 and 1 — clamp to (0.01, 0.99)
-    return round(min(max(normalized, 0.01), 0.99), 4)
-
-
-# Max possible cumulative scores per task
-MAX_SCORES = {
-    "easy":   1.6,   # 0.6 (respond) + 1.0 (close)
-    "medium": 1.9,   # 0.3 + 0.6 + 1.0
-    "hard":   1.9,   # 0.2 + 0.3 + 0.4 + 1.0
-}
-
-
-def llm_decide(obs_dict: dict, task_name: str) -> Action:
-    """Call the LLM to decide the next action. Falls back to rule-based on error."""
     user_msg = (
         f"Ticket: {obs_dict['ticket_id']}\n"
         f"Query: {obs_dict['customer_query']}\n"
@@ -114,22 +103,24 @@ def llm_decide(obs_dict: dict, task_name: str) -> Action:
         raw = response.choices[0].message.content.strip()
         raw = raw.replace("```json", "").replace("```", "").strip()
         parsed = json.loads(raw)
-        return Action(
+        action = Action(
             action_type=parsed.get("action_type", "close"),
             content=parsed.get("content"),
         )
-    except Exception:
+        return action, "null"
+    except Exception as e:
         # Fallback: rule-based agent
         difficulty = get_difficulty(obs_dict)
         sequence = FALLBACK_SEQUENCES[difficulty]
         step_idx = _fallback_step.get(task_name, 0)
         action = sequence[min(step_idx, len(sequence) - 1)]
         _fallback_step[task_name] = step_idx + 1
-        return action
+        err = str(e).replace("\n", " ")[:80]
+        return action, f"fallback:{err}"
 
 
 def run_task(task_index: int) -> float:
-    """Run one full episode for a given task, return normalized score (0, 1)."""
+    """Run one full episode for a given task."""
     env = SupportEnv()
     obs = env.reset(task_index=task_index)
     difficulty = TASKS[task_index]["difficulty"]
@@ -138,33 +129,54 @@ def run_task(task_index: int) -> float:
     # Reset fallback step counter
     _fallback_step[task_name] = 0
 
-    # Required structured output: START block
-    print(f"[START] task={task_name}", flush=True)
+    # ── [START] line ──────────────────────────────────────────────────────────
+    print(f"[START] task={task_name} env={BENCHMARK} model={MODEL_NAME}", flush=True)
 
-    raw_score = 0.0
+    rewards = []
     done = False
     step = 0
+    last_error = "null"
 
     while not done and step < 10:
-        action = llm_decide(obs.model_dump(), task_name)
+        action, error = llm_decide(obs.model_dump(), task_name)
         obs, reward, done, info = env.step(action)
-        raw_score += reward.score
+
         step += 1
+        rewards.append(reward.score)
+        last_error = error
 
-        # Normalize per-step reward to (0,1) for reporting
-        step_score = round(min(max(reward.score, 0.01), 0.99), 4)
+        # Action string representation
+        action_str = action.action_type
+        if action.content:
+            action_str += f"('{action.content[:30]}')"
 
-        # Required structured output: STEP block
-        print(f"[STEP] step={step} action={action.action_type} reward={step_score}", flush=True)
+        # ── [STEP] line ───────────────────────────────────────────────────────
+        print(
+            f"[STEP] step={step} action={action_str} "
+            f"reward={reward.score:.2f} "
+            f"done={'true' if done else 'false'} "
+            f"error={error}",
+            flush=True
+        )
 
-    # Normalize final score strictly to (0, 1)
-    max_possible = MAX_SCORES.get(difficulty, 2.0)
-    final_score = normalize_score(raw_score, max_possible)
+    success = done and len(rewards) > 0 and rewards[-1] > 0
 
-    # Required structured output: END block
-    print(f"[END] task={task_name} score={final_score} steps={step}", flush=True)
+    # Rewards as comma-separated 2dp values
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
 
-    return final_score
+    # ── [END] line ────────────────────────────────────────────────────────────
+    print(
+        f"[END] success={'true' if success else 'false'} "
+        f"steps={step} "
+        f"rewards={rewards_str}",
+        flush=True
+    )
+
+    # Return normalized score strictly in (0, 1)
+    raw = sum(rewards)
+    max_possible = {"easy": 1.6, "medium": 1.9, "hard": 1.9}.get(difficulty, 2.0)
+    normalized = round(min(max(raw / max_possible, 0.01), 0.99), 4)
+    return normalized
 
 
 def main():
