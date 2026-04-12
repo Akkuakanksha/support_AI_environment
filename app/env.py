@@ -28,6 +28,11 @@ TASKS = [
 ]
 
 
+def _clamp(score: float) -> float:
+    """Clamp score strictly to (0.01, 0.99) as required by validator."""
+    return round(min(max(score, 0.01), 0.99), 4)
+
+
 class SupportEnv:
     """
     Customer Support Ticket Resolution Environment.
@@ -80,11 +85,11 @@ class SupportEnv:
         """Process one action and return (observation, reward, done, info)."""
         if self._done:
             obs = self._build_observation()
-            return obs, Reward(score=0.0, reason="Episode already done"), True, {}
+            return obs, Reward(score=0.01, reason="Episode already done"), True, {}
 
         # Validate action
         if action.action_type not in self.VALID_ACTIONS:
-            reward = Reward(score=-0.1, reason=f"Invalid action: {action.action_type}")
+            reward = Reward(score=0.01, reason=f"Invalid action: {action.action_type}")
             return self._build_observation(), reward, False, {}
 
         self._actions_taken.append(action)
@@ -97,6 +102,10 @@ class SupportEnv:
 
         # ── Compute reward ────────────────────────────────────────────────────
         reward, done = self._compute_reward(action, difficulty)
+
+        # Clamp score strictly to (0.01, 0.99) — validator requires (0, 1)
+        clamped_score = _clamp(reward.score)
+        reward = Reward(score=clamped_score, reason=reward.reason)
 
         # Force done if max steps reached
         if self._step_count >= max_steps:
@@ -150,16 +159,16 @@ class SupportEnv:
 
         if action.action_type == "close":
             if "respond" in action_types[:-1]:
-                return Reward(score=1.0, reason="Ticket properly responded and closed"), True
+                return Reward(score=0.95, reason="Ticket properly responded and closed"), True
             return Reward(score=0.2, reason="Closed without responding"), True
 
         if action.action_type == "escalate":
-            return Reward(score=-0.1, reason="Unnecessary escalation for simple refund"), False
+            return Reward(score=0.02, reason="Unnecessary escalation for simple refund"), False
 
         if action.action_type == "classify":
             return Reward(score=0.1, reason="Classification step (optional for easy task)"), False
 
-        return Reward(score=0.0, reason="No progress"), False
+        return Reward(score=0.02, reason="No progress"), False
 
     def _reward_medium(self, action: Action, action_types: List[str]) -> Tuple[Reward, bool]:
         """
@@ -169,7 +178,7 @@ class SupportEnv:
         if action.action_type == "classify":
             if action_types.count("classify") == 1:
                 return Reward(score=0.3, reason="Issue classified"), False
-            return Reward(score=0.0, reason="Already classified"), False
+            return Reward(score=0.02, reason="Already classified"), False
 
         if action.action_type == "respond":
             content = (action.content or "").lower()
@@ -183,7 +192,7 @@ class SupportEnv:
             has_classify = "classify" in action_types[:-1]
             has_respond = "respond" in action_types[:-1]
             if has_classify and has_respond:
-                return Reward(score=1.0, reason="Full workflow: classify → respond → close"), True
+                return Reward(score=0.95, reason="Full workflow: classify → respond → close"), True
             elif has_respond:
                 return Reward(score=0.6, reason="Responded then closed (no classification)"), True
             return Reward(score=0.1, reason="Closed without proper handling"), True
@@ -191,7 +200,7 @@ class SupportEnv:
         if action.action_type == "escalate":
             return Reward(score=0.1, reason="Escalation not necessary for payment issue"), False
 
-        return Reward(score=0.0, reason="No progress"), False
+        return Reward(score=0.02, reason="No progress"), False
 
     def _reward_hard(self, action: Action, action_types: List[str]) -> Tuple[Reward, bool]:
         """
@@ -201,7 +210,7 @@ class SupportEnv:
         if action.action_type == "classify":
             if action_types.count("classify") == 1:
                 return Reward(score=0.2, reason="Issue classified"), False
-            return Reward(score=0.0, reason="Already classified"), False
+            return Reward(score=0.02, reason="Already classified"), False
 
         if action.action_type == "escalate":
             if "classify" in action_types:
@@ -222,14 +231,14 @@ class SupportEnv:
             has_escalate = "escalate" in action_types[:-1]
             has_respond = "respond" in action_types[:-1]
             if has_classify and has_escalate and has_respond:
-                return Reward(score=1.0, reason="Full workflow: classify → escalate → respond → close"), True
+                return Reward(score=0.95, reason="Full workflow: classify → escalate → respond → close"), True
             elif has_escalate and has_respond:
                 return Reward(score=0.7, reason="Escalated and responded (no classification)"), True
             elif has_respond:
                 return Reward(score=0.4, reason="Responded but did not escalate"), True
             return Reward(score=0.1, reason="Closed without proper handling"), True
 
-        return Reward(score=0.0, reason="No progress"), False
+        return Reward(score=0.02, reason="No progress"), False
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
