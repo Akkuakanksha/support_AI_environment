@@ -166,9 +166,15 @@ def run_task(task_index: int) -> float:
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
 
     # ── [END] line ────────────────────────────────────────────────────────────
+    # Final score strictly between 0 and 1
+    raw = sum(rewards)
+    max_possible = {"easy": 1.6, "medium": 1.9, "hard": 1.9}.get(difficulty, 2.0)
+    final_score = round(min(max(raw / max_possible, 0.01), 0.99), 2)
+
     print(
         f"[END] success={'true' if success else 'false'} "
         f"steps={step} "
+        f"score={final_score:.2f} "
         f"rewards={rewards_str}",
         flush=True
     )
